@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 from esm.layers.attention import FlashMultiHeadAttention, MultiHeadAttention
 from esm.layers.geom_attention import GeometricReasoningOriginalImpl
+from esm.utils import musa_fused_blocks
 from esm.utils.structure.affine3d import Affine3D
 
 
@@ -15,6 +16,9 @@ def _add_residual(
 ) -> torch.Tensor:
     """Accumulate MUSA residuals in FP32 without changing other backends."""
     if device_type == "musa":
+        fused = musa_fused_blocks.residual(x, residual, scaling_factor)
+        if fused is not None:
+            return fused
         return x.float() + residual.float() / scaling_factor
     return x + residual / scaling_factor
 
@@ -35,6 +39,9 @@ class SwiGLU(nn.Module):
         super(SwiGLU, self).__init__()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        fused = musa_fused_blocks.swiglu(x)
+        if fused is not None:
+            return fused
         x1, x2 = x.chunk(2, dim=-1)
         return F.silu(x1) * x2
 

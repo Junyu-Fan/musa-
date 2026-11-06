@@ -20,6 +20,7 @@
 # https://huggingface.co/togethercomputer/LLaMA-2-7B-32K/blob/08639a72e17836184096ae6a7e2766f2a34c3e36/modeling_flash_llama.py#L114
 # Flash attention rotary implementation can be installed like so: `pip install git+https://github.com/HazyResearch/flash-attention.git#subdirectory=csrc/rotary`
 
+import os
 from typing import Tuple
 
 import torch
@@ -35,6 +36,9 @@ except ImportError:
 # full-width cos / sign-folded sin tables cached once and the half swap done by one flip,
 # instead of 2 repeats + neg + 2 cats per call. Bit-identical: x2*(-s) == (-x2)*s exactly.
 FAST_ROTARY = True
+
+# Optional native inference kernel; compile explicitly and warm up before capture.
+FUSED_ROTARY = os.environ.get("ESM_MUSA_FUSED_ROTARY", "0") == "1"
 
 
 def rotate_half(x, interleaved=False):
@@ -222,6 +226,13 @@ class RotaryEmbedding(torch.nn.Module):
             L = q.shape[1]
             cos = self._fast_cos[seqlen_offset:seqlen_offset + L]
             sin = self._fast_sin[seqlen_offset:seqlen_offset + L]
+
+            if FUSED_ROTARY:
+                from esm.utils.musa_fused_rotary import fused_rotary
+
+                fused = fused_rotary(q, k, cos, sin)
+                if fused is not None:
+                    return fused
 
             def rot(x):
                 swapped = x.unflatten(-1, (2, x.shape[-1] // 2)).flip(-2).flatten(-2)
